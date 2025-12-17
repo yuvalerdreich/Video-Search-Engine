@@ -1,0 +1,5 @@
+yt-dlp
+scenedetect[opencv]
+Pillow
+rapidfuzz
+prompt_toolkit
