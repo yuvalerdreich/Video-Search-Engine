@@ -132,11 +132,33 @@ def search_scenes_fuzzy(captions, search_term, threshold=70):
     
     return matching_scenes
 
-def create_collage(scene_numbers, output_path='collage.png'):
+def get_next_collage_number():
+    """Get the next available collage number"""
+    existing_collages = [f for f in os.listdir('.') if f.startswith('collage_') and f.endswith('.png')]
+    if not existing_collages:
+        return 1
+    
+    # Extract numbers from existing collages
+    numbers = []
+    for filename in existing_collages:
+        try:
+            num = int(filename.replace('collage_', '').replace('.png', ''))
+            numbers.append(num)
+        except ValueError:
+            continue
+    
+    return max(numbers) + 1 if numbers else 1
+
+def create_collage(scene_numbers, output_path=None):
     """Create a collage from scene images"""
     if not scene_numbers:
         print("No scenes found to create collage")
         return
+    
+    # Generate numbered filename if not provided
+    if output_path is None:
+        collage_num = get_next_collage_number()
+        output_path = f'collage_{collage_num}.png'
     
     # Load all images
     images = []
@@ -220,10 +242,10 @@ def search_with_video_model(video_path):
     import google.generativeai as genai
     
     # Configure Gemini API
-    api_key = os.getenv('GOOGLE_API_KEY')
+    api_key = os.getenv('GEMINI_API_KEY')
     if not api_key:
-        print("ERROR: GOOGLE_API_KEY not found in environment variables")
-        print("Please set it with: export GOOGLE_API_KEY='your-api-key'")
+        print("ERROR: GEMINI_API_KEY not found in environment variables")
+        print("Please set it with: export GEMINI_API_KEY='your-api-key'")
         return
     
     genai.configure(api_key=api_key)
@@ -345,8 +367,12 @@ def extract_frames_from_video(video_path, timestamps):
         y = row * img_height
         collage.paste(img, (x, y))
     
-    collage.save('collage.png')
-    print(f"Collage saved to collage.png")
+    # Use numbered filename
+    collage_num = get_next_collage_number()
+    output_path = f'collage_{collage_num}.png'
+    
+    collage.save(output_path)
+    print(f"Collage saved to {output_path}")
     collage.show()
     
     # Cleanup temp directory
