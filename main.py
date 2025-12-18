@@ -1,10 +1,10 @@
 import yt_dlp
 from scenedetect import detect, ContentDetector, open_video
 from scenedetect.scene_manager import save_images
-from transformers import AutoModelForCausalLM, AutoTokenizer
-from PIL import Image
 import os
 import json
+import base64
+import requests
 
 def download_video():
     search_query = "super mario movie trailer"
@@ -40,8 +40,29 @@ def detect_scenes(video_path):
     
     return scene_list
 
+def image_to_base64(image_path):
+    """Convert image to base64 string"""
+    with open(image_path, 'rb') as image_file:
+        return base64.b64encode(image_file.read()).decode('utf-8')
+
+def caption_with_ollama(image_path):
+    """Generate caption using Ollama's moondream model"""
+    image_b64 = image_to_base64(image_path)
+    
+    response = requests.post(
+        'http://localhost:11434/api/generate',
+        json={
+            'model': 'moondream',
+            'prompt': 'Describe this image in one sentence.',
+            'images': [image_b64],
+            'stream': False
+        }
+    )
+    
+    return response.json()['response']
+
 def caption_scenes():
-    """Generate captions for all scene images using Moondream"""
+    """Generate captions for all scene images using Ollama"""
     
     # check if captions file exists, if so, skip
     if os.path.exists('scene_captions.json'):
@@ -49,18 +70,7 @@ def caption_scenes():
         with open('scene_captions.json', 'r') as f:
             return json.load(f)
     
-    print("Loading Moondream model...")
-    model_id = "vikhyatk/moondream2"
-    tokenizer = AutoTokenizer.from_pretrained(model_id, revision="2024-08-26")
-    model = AutoModelForCausalLM.from_pretrained(
-        model_id,
-        trust_remote_code=True,
-        revision="2024-08-26",
-        attn_implementation=None
-    )
-    model.eval()
-    
-    print("Generating captions for scenes...")
+    print("Generating captions using Ollama...")
     captions = {}
     
     # get all image files in scenes folder
@@ -68,10 +78,9 @@ def caption_scenes():
     
     for i, scene_file in enumerate(scene_files, 1):
         image_path = os.path.join('scenes', scene_file)
-        image = Image.open(image_path)
         
-        # create caption
-        caption = model.caption(image, tokenizer)["caption"]
+        # create caption using Ollama
+        caption = caption_with_ollama(image_path)
         
         # keep the scene number as key
         scene_num = str(i)
