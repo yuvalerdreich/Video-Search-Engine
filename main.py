@@ -242,10 +242,10 @@ def search_with_video_model(video_path):
     import google.generativeai as genai
     
     # Configure Gemini API
-    api_key = os.getenv('GEMINI_API_KEY')
+    api_key = os.getenv('GOOGLE_API_KEY')
     if not api_key:
-        print("ERROR: GEMINI_API_KEY not found in environment variables")
-        print("Please set it with: export GEMINI_API_KEY='your-api-key'")
+        print("ERROR: GOOGLE_API_KEY not found in environment variables")
+        print("Please set it with: export GOOGLE_API_KEY='your-api-key'")
         return
     
     genai.configure(api_key=api_key)

@@ -9,6 +9,8 @@ venv/
 *.mp3
 *.webm
 *.mkv
+*.png
+*.jpg
 scenes/
 scene_captions.json
 .vscode/
