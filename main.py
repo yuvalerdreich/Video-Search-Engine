@@ -179,22 +179,8 @@ def create_collage(scene_numbers, output_path='collage.png'):
     # Display the collage
     collage.show()
 
-def main():
-    # Download and process video if needed
-    if not os.path.exists('video.mp4'):
-        video_file = download_video()
-        print(f"Downloaded: {video_file}")
-    else:
-        print("Video already exists, skipping download")
-        video_file = 'video.mp4'
-    
-    # Detect scenes if not already done
-    if not os.path.exists('scenes') or len(os.listdir('scenes')) == 0:
-        scenes = detect_scenes(video_file)
-        print(f"Scene images saved to 'scenes' folder")
-    else:
-        print("Scenes already detected, skipping scene detection")
-    
+def search_with_image_model():
+    """Search using image captions from moondream"""
     # Create captions
     captions = caption_scenes()
     print(f"Total scenes captioned: {len(captions)}")
@@ -228,6 +214,175 @@ def main():
             create_collage(matching_scenes)
         else:
             print(f"No scenes found matching '{search_term}'")
+
+def search_with_video_model(video_path):
+    """Search using Gemini video understanding model"""
+    import google.generativeai as genai
+    
+    # Configure Gemini API
+    api_key = os.getenv('GOOGLE_API_KEY')
+    if not api_key:
+        print("ERROR: GOOGLE_API_KEY not found in environment variables")
+        print("Please set it with: export GOOGLE_API_KEY='your-api-key'")
+        return
+    
+    genai.configure(api_key=api_key)
+    
+    print("\n" + "="*50)
+    user_query = input("Using a video model. What would you like me to find in the video?\n> ")
+    
+    if not user_query.strip():
+        print("No query provided")
+        return
+    
+    print("\nAnalyzing video with Gemini... (this may take a moment)")
+    
+    # Upload video to Gemini
+    video_file = genai.upload_file(path=video_path)
+    
+    # Wait for processing
+    import time
+    while video_file.state.name == "PROCESSING":
+        print(".", end="", flush=True)
+        time.sleep(2)
+        video_file = genai.get_file(video_file.name)
+    
+    if video_file.state.name == "FAILED":
+        print(f"\nVideo processing failed: {video_file.state.name}")
+        return
+    
+    print("\nVideo processed successfully!")
+    
+    # Create prompt for Gemini
+    model = genai.GenerativeModel(model_name="gemini-2.5-flash-lite")
+    
+    prompt = f"""Analyze this video and find all the frames/moments that match this query: "{user_query}"
+
+For each matching moment, provide:
+1. The timestamp in seconds
+2. A brief description of what's happening
+
+Format your response as JSON:
+{{
+  "matches": [
+    {{"timestamp": 5.2, "description": "..."}},
+    {{"timestamp": 12.8, "description": "..."}}
+  ]
+}}"""
+    
+    response = model.generate_content([video_file, prompt])
+    
+    print(f"\nGemini Response:")
+    print(response.text)
+    
+    # Try to extract timestamps and create collage
+    try:
+        # Parse JSON response
+        import re
+        json_match = re.search(r'\{.*\}', response.text, re.DOTALL)
+        if json_match:
+            result = json.loads(json_match.group())
+            timestamps = [match['timestamp'] for match in result.get('matches', [])]
+            
+            if timestamps:
+                print(f"\nFound {len(timestamps)} matching moments")
+                # Extract frames at those timestamps
+                extract_frames_from_video(video_path, timestamps)
+            else:
+                print("\nNo matching moments found")
+        else:
+            print("\nCould not parse structured response, showing raw output above")
+    except Exception as e:
+        print(f"\nNote: Could not extract frames automatically: {e}")
+        print("Showing response above for manual review")
+
+def extract_frames_from_video(video_path, timestamps):
+    """Extract frames at specific timestamps and create collage"""
+    import cv2
+    
+    cap = cv2.VideoCapture(video_path)
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    
+    frames = []
+    temp_dir = 'temp_frames'
+    os.makedirs(temp_dir, exist_ok=True)
+    
+    for i, timestamp in enumerate(timestamps):
+        frame_number = int(timestamp * fps)
+        cap.set(cv2.CAP_PROP_POS_FRAMES, frame_number)
+        ret, frame = cap.read()
+        
+        if ret:
+            # Convert BGR to RGB
+            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            img = Image.fromarray(frame_rgb)
+            
+            # Save temporarily
+            temp_path = os.path.join(temp_dir, f'frame_{i}.jpg')
+            img.save(temp_path)
+            frames.append(img)
+    
+    cap.release()
+    
+    if not frames:
+        print("No frames could be extracted")
+        return
+    
+    # Create collage
+    num_images = len(frames)
+    cols = math.ceil(math.sqrt(num_images))
+    rows = math.ceil(num_images / cols)
+    
+    img_width, img_height = frames[0].size
+    collage_width = cols * img_width
+    collage_height = rows * img_height
+    collage = Image.new('RGB', (collage_width, collage_height), color='black')
+    
+    for idx, img in enumerate(frames):
+        row = idx // cols
+        col = idx % cols
+        x = col * img_width
+        y = row * img_height
+        collage.paste(img, (x, y))
+    
+    collage.save('collage.png')
+    print(f"Collage saved to collage.png")
+    collage.show()
+    
+    # Cleanup temp directory
+    import shutil
+    shutil.rmtree(temp_dir)
+
+def main():
+    # Download and process video if needed
+    if not os.path.exists('video.mp4'):
+        video_file = download_video()
+        print(f"Downloaded: {video_file}")
+    else:
+        print("Video already exists, skipping download")
+        video_file = 'video.mp4'
+    
+    # Detect scenes if not already done
+    if not os.path.exists('scenes') or len(os.listdir('scenes')) == 0:
+        scenes = detect_scenes(video_file)
+        print(f"Scene images saved to 'scenes' folder")
+    else:
+        print("Scenes already detected, skipping scene detection")
+    
+    # Ask user which model to use
+    print("\n" + "="*50)
+    print("Choose search method:")
+    print("1. Image model (moondream - searches scene captions)")
+    print("2. Video model (Gemini - analyzes entire video)")
+    choice = input("\nEnter your choice (1 or 2): ").strip()
+    
+    if choice == '1':
+        search_with_image_model()
+    elif choice == '2':
+        search_with_video_model(video_file)
+    else:
+        print("Invalid choice. Exiting.")
+        return
 
 if __name__ == "__main__":
     main()
