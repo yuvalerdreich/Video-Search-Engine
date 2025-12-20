@@ -1,15 +1,61 @@
-import yt_dlp
-from scenedetect import detect, ContentDetector, open_video
-from scenedetect.scene_manager import save_images
-from PIL import Image
 import os
+import re
+import sys
+import cv2
+import math
+import time
 import json
+import yt_dlp
+import shutil
 import base64
+import logging
 import requests
+from PIL import Image
 from rapidfuzz import fuzz
 from prompt_toolkit import prompt
+import google.generativeai as genai
+from scenedetect.scene_manager import save_images
 from prompt_toolkit.completion import WordCompleter
-import math
+from scenedetect import detect, ContentDetector, open_video
+from colorama import init as colorama_init, Fore, Style
+
+colorama_init(autoreset=True)
+
+class ColoredFormatter(logging.Formatter):
+    LEVEL_COLORS = {
+        logging.DEBUG: Fore.CYAN,
+        logging.INFO: Fore.GREEN,
+        logging.WARNING: Fore.YELLOW,
+        logging.ERROR: Fore.RED,
+        logging.CRITICAL: Fore.RED + Style.BRIGHT,
+    }
+
+    def format(self, record):
+        original_levelname = record.levelname
+        color = self.LEVEL_COLORS.get(record.levelno, "")
+        if color:
+            record.levelname = f"{color}{record.levelname}{Style.RESET_ALL}"
+        try:
+            return super().format(record)
+        finally:
+            record.levelname = original_levelname
+
+_handler = logging.StreamHandler()
+_handler.setFormatter(ColoredFormatter("%(asctime)s | %(levelname)s | %(message)s"))
+
+logging.basicConfig(
+    level=logging.INFO,
+    handlers=[_handler]
+)
+
+logger = logging.getLogger(__name__)
+
+def UI_line(text: str, color: str = Fore.WHITE, style: str = "") -> None:
+    sys.stdout.write(f"{style}{color}{text}{Style.RESET_ALL}\n")
+    sys.stdout.flush()
+
+def UI_input(prompt: str, color: str = Fore.WHITE, style: str = "") -> str:
+    return input(f"{style}{color}{prompt}{Style.RESET_ALL}")
 
 def download_video():
     search_query = "super mario movie trailer"
@@ -23,37 +69,26 @@ def download_video():
         result = ydl.extract_info(f"ytsearch:{search_query}", download=True)
         video_filename = ydl.prepare_filename(result['entries'][0])
     
-    print("Video downloaded successfully")
+    logger.info("Video downloaded successfully: %s", video_filename)
     return video_filename
 
 def detect_scenes(video_path):
-    print("Detecting scenes...")
-    
+    logger.info("Detecting scenes...")
     video = open_video(video_path)
     scene_list = detect(video_path, ContentDetector(threshold=27.0))
-    
-    print(f"Detected {len(scene_list)} scenes")
-    
+    logger.info("Detected %d scenes", len(scene_list))
     os.makedirs('scenes', exist_ok=True)
-    
-    save_images(
-        scene_list,
-        video,
-        num_images=1,
-        output_dir='scenes'
-    )
-    
+    save_images(scene_list, video, num_images=1, output_dir='scenes')
     return scene_list
 
 def image_to_base64(image_path):
-    """Convert image to base64 string"""
+    # Convert image to base64 string
     with open(image_path, 'rb') as image_file:
         return base64.b64encode(image_file.read()).decode('utf-8')
 
 def caption_with_ollama(image_path):
-    """Generate caption using Ollama's moondream model"""
+    # Generate caption using Ollama's moondream model
     image_b64 = image_to_base64(image_path)
-    
     response = requests.post(
         'http://localhost:11434/api/generate',
         json={
@@ -67,46 +102,36 @@ def caption_with_ollama(image_path):
     return response.json()['response']
 
 def caption_scenes():
-    """Generate captions for all scene images using Ollama"""
-    
-    # Load existing captions if available
+    # Generate captions for all scene images using Ollama
     if os.path.exists('scene_captions.json'):
-        print("Loading existing captions...")
+        logger.info("Loading existing captions...")
         with open('scene_captions.json', 'r') as f:
             captions = json.load(f)
     else:
         captions = {}
     
-    print("Generating captions using Ollama...")
+    logger.info("Generating captions using Ollama...")
     
     # get all image files in scenes folder
     scene_files = sorted([f for f in os.listdir('scenes') if f.endswith(('.jpg', '.png'))])
     
     for i, scene_file in enumerate(scene_files, 1):
         scene_num = str(i)
-        
-        # Skip if already captioned
         if scene_num in captions:
-            print(f"Scene {scene_num}: Already captioned, skipping")
+            logger.info(f"Scene {scene_num}: Already captioned, skipping")
             continue
             
         image_path = os.path.join('scenes', scene_file)
-        
-        # create caption using Ollama
         caption = caption_with_ollama(image_path)
-        
         captions[scene_num] = caption
-        print(f"Scene {scene_num}: {caption}")
-        
-        # Save after each caption (in case of crash)
+        logger.info(f"Scene {scene_num}: {caption}")
         with open('scene_captions.json', 'w') as f:
             json.dump(captions, f, indent=2)
-    
-    print(f"Saved captions to scene_captions.json")
+    logger.info("Saved captions to scene_captions.json")
     return captions
 
 def extract_words_from_captions(captions):
-    """Extract unique words from all captions for autocomplete"""
+    # Extract unique words from all captions for autocomplete
     words = set()
     for caption in captions.values():
         # Split by spaces and common punctuation
@@ -115,7 +140,7 @@ def extract_words_from_captions(captions):
     return sorted(list(words))
 
 def search_scenes_fuzzy(captions, search_term, threshold=70):
-    """Search scenes using fuzzy matching"""
+    # Search scenes using fuzzy matching
     matching_scenes = []
     
     for scene_num, caption in captions.items():
@@ -133,7 +158,7 @@ def search_scenes_fuzzy(captions, search_term, threshold=70):
     return matching_scenes
 
 def get_next_collage_number():
-    """Get the next available collage number"""
+    # Get the next available collage number
     existing_collages = [f for f in os.listdir('.') if f.startswith('collage_') and f.endswith('.png')]
     if not existing_collages:
         return 1
@@ -150,17 +175,15 @@ def get_next_collage_number():
     return max(numbers) + 1 if numbers else 1
 
 def create_collage(scene_numbers, output_path=None):
-    """Create a collage from scene images"""
+    # Create a collage from scene images
     if not scene_numbers:
-        print("No scenes found to create collage")
+        logger.error("No scenes found to create collage")
         return
     
     # Generate numbered filename if not provided
     if output_path is None:
         collage_num = get_next_collage_number()
         output_path = f'collage_{collage_num}.png'
-    
-    # Load all images
     images = []
     scene_files = sorted([f for f in os.listdir('scenes') if f.endswith(('.jpg', '.png'))])
     
@@ -171,7 +194,7 @@ def create_collage(scene_numbers, output_path=None):
             images.append(Image.open(img_path))
     
     if not images:
-        print("No valid images found")
+        logger.warning("No valid images found")
         return
     
     # Calculate grid size
@@ -196,16 +219,13 @@ def create_collage(scene_numbers, output_path=None):
         collage.paste(img, (x, y))
     
     collage.save(output_path)
-    print(f"Collage saved to {output_path}")
-    
-    # Display the collage
+    logger.info(f"Collage saved to {output_path}")
     collage.show()
 
 def search_with_image_model():
-    """Search using image captions from moondream"""
-    # Create captions
+    # Search using image captions from moondream
     captions = caption_scenes()
-    print(f"Total scenes captioned: {len(captions)}")
+    logger.info(f"Total scenes captioned: {len(captions)}")
     
     # Extract words for autocomplete
     words = extract_words_from_captions(captions)
@@ -213,12 +233,9 @@ def search_with_image_model():
     
     # Search loop
     while True:
-        print("\n" + "="*50)
-        search_term = prompt("Search the video using a word (or 'quit' to exit): ", 
-                            completer=word_completer)
-        
+        search_term = prompt("Search the video using a word (or 'quit' to exit): ", completer=word_completer)
         if search_term.lower() in ['quit', 'exit', 'q']:
-            print("Goodbye!")
+            logger.info("Goodbye!")
             break
         
         if not search_term.strip():
@@ -228,52 +245,45 @@ def search_with_image_model():
         matching_scenes = search_scenes_fuzzy(captions, search_term, threshold=70)
         
         if matching_scenes:
-            print(f"\nFound {len(matching_scenes)} matching scene(s):")
+            logger.info(f"\nFound {len(matching_scenes)} matching scene(s):")
             for scene_num in matching_scenes:
-                print(f"  Scene {scene_num}: {captions[scene_num]}")
+                logger.info(f"  Scene {scene_num}: {captions[scene_num]}")
             
             # Create and display collage
             create_collage(matching_scenes)
         else:
-            print(f"No scenes found matching '{search_term}'")
+            logger.error(f"No scenes found matching '{search_term}'")
 
 def search_with_video_model(video_path):
-    """Search using Gemini video understanding model"""
-    import google.generativeai as genai
-    
-    # Configure Gemini API
+    # Search using Gemini video understanding model
     api_key = os.getenv('GOOGLE_API_KEY')
     if not api_key:
-        print("ERROR: GOOGLE_API_KEY not found in environment variables")
-        print("Please set it with: export GOOGLE_API_KEY='your-api-key'")
+        logger.error("ERROR: GOOGLE_API_KEY not found in environment variables")
         return
     
     genai.configure(api_key=api_key)
     
-    print("\n" + "="*50)
     user_query = input("Using a video model. What would you like me to find in the video?\n> ")
     
     if not user_query.strip():
-        print("No query provided")
+        logger.error("No query provided")
         return
     
-    print("\nAnalyzing video with Gemini... (this may take a moment)")
+    logger.info("Analyzing video with Gemini... (this may take a moment)")
     
     # Upload video to Gemini
     video_file = genai.upload_file(path=video_path)
     
     # Wait for processing
-    import time
     while video_file.state.name == "PROCESSING":
-        print(".", end="", flush=True)
         time.sleep(2)
         video_file = genai.get_file(video_file.name)
     
     if video_file.state.name == "FAILED":
-        print(f"\nVideo processing failed: {video_file.state.name}")
+        logger.error(f"Video processing failed: {video_file.state.name}")
         return
     
-    print("\nVideo processed successfully!")
+    logger.info("Video processed successfully!")
     
     # Create prompt for Gemini
     model = genai.GenerativeModel(model_name="gemini-2.5-flash-lite")
@@ -293,38 +303,32 @@ Format your response as JSON:
 }}"""
     
     response = model.generate_content([video_file, prompt])
+    logger.info(f"\nGemini Response:")
+    logger.info(response.text)
     
-    print(f"\nGemini Response:")
-    print(response.text)
-    
-    # Try to extract timestamps and create collage
     try:
         # Parse JSON response
-        import re
         json_match = re.search(r'\{.*\}', response.text, re.DOTALL)
         if json_match:
             result = json.loads(json_match.group())
             timestamps = [match['timestamp'] for match in result.get('matches', [])]
             
             if timestamps:
-                print(f"\nFound {len(timestamps)} matching moments")
+                logger.info(f"\nFound {len(timestamps)} matching moments")
                 # Extract frames at those timestamps
                 extract_frames_from_video(video_path, timestamps)
             else:
-                print("\nNo matching moments found")
+                logger.error("\nNo matching moments found")
         else:
-            print("\nCould not parse structured response, showing raw output above")
+            logger.error("\nCould not parse structured response, showing raw output above")
     except Exception as e:
-        print(f"\nNote: Could not extract frames automatically: {e}")
-        print("Showing response above for manual review")
+        logger.error(f"\nNote: Could not extract frames automatically: {e}")
+        logger.error("Showing response above for manual review")
 
 def extract_frames_from_video(video_path, timestamps):
-    """Extract frames at specific timestamps and create collage"""
-    import cv2
-    
+    # Extract frames at specific timestamps and create collage
     cap = cv2.VideoCapture(video_path)
     fps = cap.get(cv2.CAP_PROP_FPS)
-    
     frames = []
     temp_dir = 'temp_frames'
     os.makedirs(temp_dir, exist_ok=True)
@@ -338,8 +342,6 @@ def extract_frames_from_video(video_path, timestamps):
             # Convert BGR to RGB
             frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             img = Image.fromarray(frame_rgb)
-            
-            # Save temporarily
             temp_path = os.path.join(temp_dir, f'frame_{i}.jpg')
             img.save(temp_path)
             frames.append(img)
@@ -347,14 +349,13 @@ def extract_frames_from_video(video_path, timestamps):
     cap.release()
     
     if not frames:
-        print("No frames could be extracted")
+        logger.error("No frames could be extracted")
         return
     
     # Create collage
     num_images = len(frames)
     cols = math.ceil(math.sqrt(num_images))
     rows = math.ceil(num_images / cols)
-    
     img_width, img_height = frames[0].size
     collage_width = cols * img_width
     collage_height = rows * img_height
@@ -367,47 +368,44 @@ def extract_frames_from_video(video_path, timestamps):
         y = row * img_height
         collage.paste(img, (x, y))
     
-    # Use numbered filename
     collage_num = get_next_collage_number()
     output_path = f'collage_{collage_num}.png'
-    
     collage.save(output_path)
-    print(f"Collage saved to {output_path}")
+    logger.info(f"Collage saved to {output_path}")
     collage.show()
     
     # Cleanup temp directory
-    import shutil
     shutil.rmtree(temp_dir)
 
 def main():
     # Download and process video if needed
     if not os.path.exists('video.mp4'):
         video_file = download_video()
-        print(f"Downloaded: {video_file}")
+        logger.info(f"Downloaded: {video_file}")
     else:
-        print("Video already exists, skipping download")
+        logger.info("Video already exists, skipping download")
         video_file = 'video.mp4'
     
     # Detect scenes if not already done
     if not os.path.exists('scenes') or len(os.listdir('scenes')) == 0:
-        scenes = detect_scenes(video_file)
-        print(f"Scene images saved to 'scenes' folder")
+        # scenes = detect_scenes(video_file)
+        logger.info(f"Scene images saved to 'scenes' folder")
     else:
-        print("Scenes already detected, skipping scene detection")
+        logger.info("Scenes already detected, skipping scene detection")
     
     # Ask user which model to use
-    print("\n" + "="*50)
-    print("Choose search method:")
-    print("1. Image model (moondream - searches scene captions)")
-    print("2. Video model (Gemini - analyzes entire video)")
-    choice = input("\nEnter your choice (1 or 2): ").strip()
+    UI_line(Fore.CYAN + "\n" + "="*50 + Style.RESET_ALL)
+    UI_line(Style.BRIGHT + "Choose search method:" + Style.RESET_ALL)
+    UI_line(Fore.GREEN + "1. Image model (moondream - searches scene captions)" + Style.RESET_ALL)
+    UI_line(Fore.YELLOW + "2. Video model (Gemini - analyzes entire video)" + Style.RESET_ALL)
+    choice = UI_input(Fore.MAGENTA + "\nEnter your choice (1 or 2): " + Style.RESET_ALL).strip()
     
     if choice == '1':
         search_with_image_model()
     elif choice == '2':
         search_with_video_model(video_file)
     else:
-        print("Invalid choice. Exiting.")
+        logger.error("Invalid choice. Exiting.")
         return
 
 if __name__ == "__main__":
