@@ -233,10 +233,11 @@ def search_with_image_model():
     
     # Search loop
     while True:
-        search_term = prompt("Search the video using a word (or 'quit' to exit): ", completer=word_completer)
-        if search_term.lower() in ['quit', 'exit', 'q']:
-            logger.info("Goodbye!")
-            break
+        search_term = prompt("Search the video using a word (b = back, q = quit): ", completer=word_completer)
+        if search_term.lower() == 'b':
+            return 'back'
+        if search_term.lower() == 'q':
+            return 'quit'
         
         if not search_term.strip():
             continue
@@ -259,36 +260,42 @@ def search_with_video_model(video_path):
     api_key = os.getenv('GOOGLE_API_KEY')
     if not api_key:
         logger.error("ERROR: GOOGLE_API_KEY not found in environment variables")
-        return
+        return 'back'
     
     genai.configure(api_key=api_key)
     
-    user_query = input("Using a video model. What would you like me to find in the video?\n> ")
-    
-    if not user_query.strip():
-        logger.error("No query provided")
-        return
-    
-    logger.info("Analyzing video with Gemini... (this may take a moment)")
-    
-    # Upload video to Gemini
-    video_file = genai.upload_file(path=video_path)
-    
-    # Wait for processing
-    while video_file.state.name == "PROCESSING":
-        time.sleep(2)
-        video_file = genai.get_file(video_file.name)
-    
-    if video_file.state.name == "FAILED":
-        logger.error(f"Video processing failed: {video_file.state.name}")
-        return
-    
-    logger.info("Video processed successfully!")
-    
-    # Create prompt for Gemini
-    model = genai.GenerativeModel(model_name="gemini-2.5-flash-lite")
-    
-    prompt = f"""Analyze this video and find all the frames/moments that match this query: "{user_query}"
+    while True:
+        user_query = UI_input("Using a video model. What would you like me to find in the video? (b = back, q = quit)\n> ")
+        
+        if user_query.strip().lower() == 'b':
+            return 'back'
+        if user_query.strip().lower() == 'q':
+            return 'quit'
+        
+        if not user_query.strip():
+            logger.error("No query provided")
+            continue
+        
+        logger.info("Analyzing video with Gemini... (this may take a moment)")
+        
+        # Upload video to Gemini
+        video_file = genai.upload_file(path=video_path)
+        
+        # Wait for processing
+        while video_file.state.name == "PROCESSING":
+            time.sleep(2)
+            video_file = genai.get_file(video_file.name)
+        
+        if video_file.state.name == "FAILED":
+            logger.error(f"Video processing failed: {video_file.state.name}")
+            continue
+        
+        logger.info("Video processed successfully!")
+        
+        # Create prompt for Gemini
+        model = genai.GenerativeModel(model_name="gemini-2.5-flash-lite")
+        
+        prompt = f"""Analyze this video and find all the frames/moments that match this query: "{user_query}"
 
 For each matching moment, provide:
 1. The timestamp in seconds
@@ -301,29 +308,29 @@ Format your response as JSON:
     {{"timestamp": 12.8, "description": "..."}}
   ]
 }}"""
-    
-    response = model.generate_content([video_file, prompt])
-    logger.info(f"\nGemini Response:")
-    logger.info(response.text)
-    
-    try:
-        # Parse JSON response
-        json_match = re.search(r'\{.*\}', response.text, re.DOTALL)
-        if json_match:
-            result = json.loads(json_match.group())
-            timestamps = [match['timestamp'] for match in result.get('matches', [])]
-            
-            if timestamps:
-                logger.info(f"\nFound {len(timestamps)} matching moments")
-                # Extract frames at those timestamps
-                extract_frames_from_video(video_path, timestamps)
+        
+        response = model.generate_content([video_file, prompt])
+        logger.info(f"\nGemini Response:")
+        logger.info(response.text)
+        
+        try:
+            # Parse JSON response
+            json_match = re.search(r'\{.*\}', response.text, re.DOTALL)
+            if json_match:
+                result = json.loads(json_match.group())
+                timestamps = [match['timestamp'] for match in result.get('matches', [])]
+                
+                if timestamps:
+                    logger.info(f"\nFound {len(timestamps)} matching moments")
+                    # Extract frames at those timestamps
+                    extract_frames_from_video(video_path, timestamps)
+                else:
+                    logger.error("\nNo matching moments found")
             else:
-                logger.error("\nNo matching moments found")
-        else:
-            logger.error("\nCould not parse structured response, showing raw output above")
-    except Exception as e:
-        logger.error(f"\nNote: Could not extract frames automatically: {e}")
-        logger.error("Showing response above for manual review")
+                logger.error("\nCould not parse structured response, showing raw output above")
+        except Exception as e:
+            logger.error(f"\nNote: Could not extract frames automatically: {e}")
+            logger.error("Showing response above for manual review")
 
 def extract_frames_from_video(video_path, timestamps):
     # Extract frames at specific timestamps and create collage
@@ -388,25 +395,32 @@ def main():
     
     # Detect scenes if not already done
     if not os.path.exists('scenes') or len(os.listdir('scenes')) == 0:
-        # scenes = detect_scenes(video_file)
         logger.info(f"Scene images saved to 'scenes' folder")
     else:
         logger.info("Scenes already detected, skipping scene detection")
     
     # Ask user which model to use
-    UI_line(Fore.CYAN + "\n" + "="*50 + Style.RESET_ALL)
-    UI_line(Style.BRIGHT + "Choose search method:" + Style.RESET_ALL)
-    UI_line(Fore.GREEN + "1. Image model (moondream - searches scene captions)" + Style.RESET_ALL)
-    UI_line(Fore.YELLOW + "2. Video model (Gemini - analyzes entire video)" + Style.RESET_ALL)
-    choice = UI_input(Fore.MAGENTA + "\nEnter your choice (1 or 2): " + Style.RESET_ALL).strip()
-    
-    if choice == '1':
-        search_with_image_model()
-    elif choice == '2':
-        search_with_video_model(video_file)
-    else:
-        logger.error("Invalid choice. Exiting.")
-        return
+    while True:
+        UI_line(Fore.CYAN + "\n" + "="*50 + Style.RESET_ALL)
+        UI_line(Style.BRIGHT + "Choose search method:" + Style.RESET_ALL)
+        UI_line(Fore.GREEN + "1. Image model (moondream - searches scene captions)" + Style.RESET_ALL)
+        UI_line(Fore.YELLOW + "2. Video model (Gemini - analyzes entire video)" + Style.RESET_ALL)
+        choice = UI_input(Fore.MAGENTA + "\nEnter your choice (1 or 2) (q = quit): " + Style.RESET_ALL).strip()
+        
+        if choice.lower() == 'q':
+            return
+        
+        if choice == '1':
+            action = search_with_image_model()
+            if action == 'quit':
+                return
+        elif choice == '2':
+            action = search_with_video_model(video_file)
+            if action == 'quit':
+                return
+        else:
+            logger.error("Invalid choice.")
+            continue
 
 if __name__ == "__main__":
     main()
